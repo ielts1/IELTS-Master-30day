@@ -1,0 +1,59 @@
+name: Build APK
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Create Capacitor project
+        run: |
+          npm init -y
+          npm i @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/local-notifications@6 @capacitor/app@6
+          cat > capacitor.config.json <<'EOF'
+          {
+            "appId": "com.ieltsmaster.app",
+            "appName": "IELTS Master",
+            "webDir": "www",
+            "server": { "androidScheme": "https" },
+            "plugins": { "CapacitorHttp": { "enabled": true } }
+          }
+          EOF
+          npx cap add android
+      - name: Alarm sound
+        run: |
+          python3 - <<'PY'
+          import wave,struct,math
+          sr=22050; out=[]
+          for rep in range(8):
+              for f,d in ((880,.16),(1175,.16),(880,.16),(1175,.32),(0,.2)):
+                  for i in range(int(sr*d)):
+                      v=0 if f==0 else int(16000*math.sin(2*math.pi*f*i/sr)*(1 if i<sr*d-300 else 0.3))
+                      out.append(v)
+          w=wave.open('alarm.wav','wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+          w.writeframes(b''.join(struct.pack('<h',x) for x in out)); w.close()
+          PY
+          mkdir -p android/app/src/main/res/raw
+          cp alarm.wav android/app/src/main/res/raw/alarm.wav
+      - name: Android permissions
+        run: |
+          sed -i 's#<application#<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>\n    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>\n    <uses-permission android:name="android.permission.VIBRATE"/>\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>\n    <uses-permission android:name="android.permission.WAKE_LOCK"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>\n    <application#' android/app/src/main/AndroidManifest.xml
+          npx cap sync android
+      - name: Build debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IELTS-Master-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
