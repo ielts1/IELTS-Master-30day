@@ -1,134 +1,148 @@
-name: Build APK
+name: Build IELTS Master APK
 
 on:
+  workflow_dispatch:   # GitHub-এ গিয়ে ম্যানুয়ালি Run করা যাবে
   push:
-    branches: [main, master]
-  workflow_dispatch:
+    branches: [ main, master ]
+    paths:
+      - 'index.html'
+      - 'package.json'
+      - 'capacitor.config.*'
+      - '.github/workflows/build-apk.yml'
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
 
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: 17
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
 
       - name: Create Capacitor project
         run: |
-          npm init -y
+          # নতুন Capacitor প্রজেক্ট
+          npm create @capacitor/app@latest . -- --name "IELTS Master" --app-id "com.ielts.master.skp" --template blank || true
 
-          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/local-notifications@6 @capacitor/app@6
-
-          mkdir -p www
-
-          cat > www/index.html <<'EOF'
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>IELTS Master</title>
-          </head>
-          <body>
-            <h1>IELTS Master</h1>
-          </body>
-          </html>
-          EOF
-
-          cat > capacitor.config.json <<'EOF'
+          # package.json না থাকলে বানিয়ে দাও
+          if [ ! -f package.json ]; then
+            cat > package.json << 'EOF'
           {
-            "appId": "com.ieltsmaster.app",
+            "name": "ielts-master",
+            "version": "1.0.0",
+            "private": true,
+            "scripts": {
+              "build": "echo skip"
+            },
+            "dependencies": {
+              "@capacitor/android": "^6.2.0",
+              "@capacitor/app": "^6.0.2",
+              "@capacitor/core": "^6.2.0",
+              "@capacitor/local-notifications": "^6.1.1",
+              "@capacitor/cli": "^6.2.0"
+            }
+          }
+          EOF
+          fi
+
+          npm install
+          npm install @capacitor/core@^6 @capacitor/cli@^6 @capacitor/android@^6 @capacitor/app@^6 @capacitor/local-notifications@^6 --save
+
+      - name: Prepare web assets
+        run: |
+          mkdir -p www
+          # রুটে index.html থাকলে কপি করো
+          if [ -f index.html ]; then
+            cp index.html www/index.html
+          elif [ -f www/index.html ]; then
+            echo "www/index.html already exists"
+          else
+            echo "ERROR: index.html not found in repo root or www/"
+            exit 1
+          fi
+          # খালি favicon যাতে 404 না আসে
+          touch www/favicon.ico || true
+
+      - name: Capacitor config
+        run: |
+          cat > capacitor.config.json << 'EOF'
+          {
+            "appId": "com.ielts.master.skp",
             "appName": "IELTS Master",
             "webDir": "www",
             "server": {
               "androidScheme": "https"
             },
+            "android": {
+              "allowMixedContent": true
+            },
             "plugins": {
-              "CapacitorHttp": {
-                "enabled": true
+              "LocalNotifications": {
+                "smallIcon": "ic_stat_icon_config_sample",
+                "iconColor": "#0d3552",
+                "sound": "beep.wav"
               }
             }
           }
           EOF
 
-          npx cap add android
-
-      - name: Create alarm sound
+      - name: Add Android platform
         run: |
-          python3 - <<'PY'
-          import wave
-          import struct
-          import math
+          npx cap add android || true
+          npx cap sync android
 
-          sr = 22050
-          out = []
-
-          for rep in range(8):
-              for f, d in ((880,.16),(1175,.16),(880,.16),(1175,.32),(0,.2)):
-                  for i in range(int(sr*d)):
-                      v = 0 if f == 0 else int(
-                          16000 * math.sin(2*math.pi*f*i/sr)
-                      )
-                      out.append(v)
-
-          with wave.open('alarm.wav', 'wb') as w:
-              w.setnchannels(1)
-              w.setsampwidth(2)
-              w.setframerate(sr)
-              w.writeframes(
-                  b''.join(struct.pack('<h', x) for x in out)
-              )
-          PY
-
-          mkdir -p android/app/src/main/res/raw
-          cp alarm.wav android/app/src/main/res/raw/alarm.wav
-
-      - name: Android permissions
+      - name: Fix Android permissions (Microphone + Notifications)
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          if [ -f "$MANIFEST" ]; then
+            # RECORD_AUDIO না থাকলে যোগ করো
+            if ! grep -q "RECORD_AUDIO" "$MANIFEST"; then
+              sed -i 's|</manifest>|    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />\n    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n</manifest>|' "$MANIFEST"
+            fi
+            echo "=== AndroidManifest permissions ==="
+            grep "uses-permission" "$MANIFEST" || true
+          else
+            echo "WARNING: AndroidManifest.xml not found"
+            ls -la android/app/src/main/ || true
+          fi
 
-          p = Path("android/app/src/main/AndroidManifest.xml")
-          s = p.read_text()
-
-          permissions = [
-              "android.permission.POST_NOTIFICATIONS",
-              "android.permission.SCHEDULE_EXACT_ALARM",
-              "android.permission.VIBRATE",
-              "android.permission.RECEIVE_BOOT_COMPLETED",
-              "android.permission.WAKE_LOCK"
-          ]
-
-          for permission in permissions:
-              tag = f'<uses-permission android:name="{permission}"/>'
-              if permission not in s:
-                  s = s.replace("<application", tag + "\n    <application", 1)
-
-          p.write_text(s)
-          PY
-
-      - name: Sync Capacitor
-        run: npx cap sync android
-
-      - name: Build debug APK
+      - name: Enable WebView microphone / media permissions
         run: |
-          cd android
+          # MainActivity-তে permission request হ্যান্ডেল করার জন্য প্রয়োজন হলে
+          MAIN=$(find android -name "MainActivity.java" -o -name "MainActivity.kt" | head -1)
+          echo "MainActivity: $MAIN"
+          # Capacitor 6 সাধারণত নিজেই handle করে; extra কিছু লাগলে এখানে যোগ করা যাবে
+
+      - name: Build Debug APK
+        working-directory: android
+        run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: Upload APK
+      - name: Find and upload APK
         uses: actions/upload-artifact@v4
         with:
           name: IELTS-Master-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            android/app/build/outputs/apk/debug/*.apk
+            android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Show APK info
+        run: |
+          find android -name "*.apk" -exec ls -lh {} \;
