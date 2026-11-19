@@ -255,6 +255,28 @@ jobs:
           p.write_text(s)
           PY
 
+      - name: Enable Android text-selection apps (Word Helper)
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path("android/app/src/main/AndroidManifest.xml")
+          s = p.read_text()
+          action = "android.intent.action.PROCESS_TEXT"
+          if action not in s:
+              query = """        <intent>
+                      <action android:name="android.intent.action.PROCESS_TEXT" />
+                      <data android:mimeType="text/plain" />
+                  </intent>
+              """
+              if re.search(r"<queries\b[^>]*>", s):
+                  s = re.sub(r"(</queries>)", query + r"\n    \1", s, count=1)
+              else:
+                  s = re.sub(r"(<application\b)", "    <queries>\n" + query + "    </queries>\n    \\1", s, count=1)
+              p.write_text(s)
+          print("PROCESS_TEXT visibility configured")
+          PY
+
       - name: Build IELTS Master APK
         working-directory: android
         run: |
