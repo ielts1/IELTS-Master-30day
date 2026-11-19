@@ -15,7 +15,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout Repository
@@ -104,6 +104,49 @@ jobs:
         run: |
           npx cap add android
 
+      - name: Fix Gradle Download Timeout
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          import re
+
+          p = Path(
+              "android/gradle/wrapper/gradle-wrapper.properties"
+          )
+
+          if not p.exists():
+              raise SystemExit("Gradle wrapper properties missing!")
+
+          lines = p.read_text().splitlines()
+
+          updated = []
+          found_url = False
+
+          for line in lines:
+              if line.startswith("distributionUrl="):
+                  line = line.replace("-all.zip", "-bin.zip")
+                  found_url = True
+
+              if line.startswith("networkTimeout="):
+                  continue
+
+              updated.append(line)
+
+          if not found_url:
+              raise SystemExit("Gradle distribution URL missing!")
+
+          updated.append("networkTimeout=120000")
+
+          p.write_text("\n".join(updated) + "\n")
+
+          print("Gradle configuration updated:")
+          print(p.read_text())
+          PY
+
+      - name: Setup Gradle Cache
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Sync Original App
         run: |
           npx cap sync android
@@ -132,6 +175,7 @@ jobs:
                       f'<uses-permission '
                       f'android:name="{permission}"/>'
                   )
+
                   s = s.replace(
                       "<application",
                       tag + "\n    <application",
@@ -139,6 +183,7 @@ jobs:
                   )
 
           p.write_text(s)
+
           print("Android permissions configured.")
           PY
 
@@ -160,6 +205,7 @@ jobs:
             exit 1
           fi
 
+          echo "APK successfully generated!"
           ls -lh "$APK"
 
       - name: Upload IELTS Master APK
